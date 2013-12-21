@@ -109,8 +109,8 @@ class SassExtensionsTest < Test::Unit::TestCase
     assert_equal "25px", evaluate("pow(5px, 2)")
     assert_equal "25px", evaluate("pow($number: 5px, $exponent: 2)")
     assert_equal "79.43236px", evaluate("pow(5px, e())")
-    assert (0..2).include?(evaluate("random(2)").to_i)
-    assert (4..16).include?(evaluate("random(4, 16)").to_i)
+    assert((0..2).include?(evaluate("random(2)").to_i))
+    assert((4..16).include?(evaluate("random(4, 16)").to_i))
   end
 
   def test_blank
@@ -135,6 +135,9 @@ class SassExtensionsTest < Test::Unit::TestCase
     assert_equal "url(/font/with/wrong_ext.woff) format('svg')", evaluate("font_files('/font/with/wrong_ext.woff', 'svg')")
     assert_equal "url(/font/with/no_ext) format('opentype')", evaluate("font_files('/font/with/no_ext', 'otf')")
     assert_equal "url(/font/with/weird.ext) format('truetype')", evaluate("font_files('/font/with/weird.ext', 'ttf')")
+
+    # unquoted path strings used to break because of a regex test
+    assert_equal "url(/font/with/right_ext.woff) format('woff')", evaluate("font_files(unquote('/font/with/right_ext.woff'))")
 
     assert_equal "url(/font/with/right_ext.woff) format('woff'), url(/font/with/right_ext_also.otf) format('opentype')", evaluate("font_files('/font/with/right_ext.woff', '/font/with/right_ext_also.otf')")
     assert_equal "url(/font/with/wrong_ext.woff) format('truetype'), url(/font/with/right_ext.otf) format('opentype')", evaluate("font_files('/font/with/wrong_ext.woff', 'ttf', '/font/with/right_ext.otf')")
@@ -182,6 +185,18 @@ class SassExtensionsTest < Test::Unit::TestCase
     Compass.configuration.fonts_path = File.expand_path "../fixtures/fonts", File.dirname(__FILE__)
     base64_string = File.read(File.join(Compass.configuration.fonts_path, "bgrove.base64.txt")).chomp
     assert_equal "url('data:font/truetype;base64,#{base64_string}') format('truetype')", evaluate("inline_font_files('bgrove.ttf', truetype)")
+
+    # without specifying the format
+    assert_equal "url('data:font/truetype;base64,#{base64_string}') format('truetype')", evaluate("inline_font_files('bgrove.ttf')")
+  end
+
+  def test_font_formats
+    assert_equal "woff, truetype, svg, embedded-opentype", evaluate("font-formats('/font/name.woff', woff, '/fonts/name.ttf', '/fonts/name.svg#fontpath', unquote('/fonts/name.eot'))")
+  end
+
+  def test_linear_gradient_with_calc
+    assert_equal "-webkit-linear-gradient(left, #ffffff calc(100% - 50px), rgba(0, 0, 0, 0) calc(100% - 50px))",
+        evaluate("-webkit(-linear-gradient(to right, white calc(100% - 50px), transparent calc(100% - 50px)))")
   end
 
 
@@ -200,6 +215,12 @@ class SassExtensionsTest < Test::Unit::TestCase
 
 protected
   def evaluate(value)
-    Sass::Script::Parser.parse(value, 0, 0).perform(Sass::Environment.new).to_s
+    result = Sass::Script::Parser.parse(value, 0, 0).perform(Sass::Environment.new)
+    begin
+      result.to_s
+    rescue Sass::SyntaxError => e
+      raise e unless e.message =~ /isn't a valid CSS value/
+      result.inspect
+    end
   end
 end

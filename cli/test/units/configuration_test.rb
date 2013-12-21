@@ -6,15 +6,23 @@ class ConfigurationTest < Test::Unit::TestCase
 
   setup do
     Compass.reset_configuration!
+    @original_wd = Dir.pwd
+    FileUtils.rm_rf "test_tmp"
+    FileUtils.mkdir_p "test_tmp/images"
+    FileUtils.mkdir_p "test_tmp/fonts"
+    Dir.chdir "test_tmp"
   end
   
   after do
     Compass.reset_configuration!
+    Dir.chdir @original_wd
+    FileUtils.rm_rf "test_tmp"
   end
 
   def test_parse_and_serialize
     contents = StringIO.new(<<-CONFIG)
       require 'compass'
+      require 'compass/import-once/activate'
       # Require any additional compass plugins here.
 
       project_type = :stand_alone
@@ -187,6 +195,120 @@ class ConfigurationTest < Test::Unit::TestCase
     assert_equal "WARNING: asset_cache_buster is code and cannot be written to a file. You'll need to copy it yourself.\n", warning
   end
 
+  def test_cache_buster_file_not_passed_when_the_file_does_not_exist
+    config = Compass::Configuration::Data.new("test_cache_buster_file_not_passed_when_the_file_does_not_exist")
+    the_file = nil
+    was_called = nil
+    config.asset_cache_buster do |path, file|
+      was_called = true
+      the_file = file
+      "busted=true"
+    end
+
+    Compass.add_configuration(config)
+
+
+    sass = Sass::Engine.new(<<-SCSS, Compass.configuration.to_sass_engine_options.merge(:syntax => :scss))
+      .foo { background: image-url("asdf.gif") }
+    SCSS
+    sass.render
+    assert was_called
+    assert_nil the_file
+  end
+
+  def test_cache_buster_file_is_closed
+    config = Compass::Configuration::Data.new("test_cache_buster_file_is_closed")
+    the_file = nil
+    was_called = nil
+    FileUtils.touch "images/asdf.gif"
+    config.asset_cache_buster do |path, file|
+      was_called = true
+      the_file = file
+      "busted=true"
+    end
+
+    Compass.add_configuration(config)
+
+    sass = Sass::Engine.new(<<-SCSS, Compass.configuration.to_sass_engine_options.merge(:syntax => :scss))
+      .foo { background: image-url("asdf.gif") }
+    SCSS
+    sass.render
+    assert was_called
+    assert_kind_of File, the_file
+    assert the_file.closed?
+  end
+
+  def test_cache_buster_handles_id_refs_for_images
+    config = Compass::Configuration::Data.new("test_cache_buster_file_is_closed")
+    the_file = nil
+    was_called = nil
+    FileUtils.touch "images/asdf.svg"
+    config.asset_cache_buster do |path, file|
+      was_called = true
+      the_file = file
+      "busted=true"
+    end
+
+    Compass.add_configuration(config)
+
+    sass = Sass::Engine.new(<<-SCSS, Compass.configuration.to_sass_engine_options.merge(:syntax => :scss))
+      .foo { background: image-url("asdf.svg#image-1") }
+    SCSS
+    result = sass.render
+    assert was_called
+    assert_kind_of File, the_file
+    assert the_file.closed?
+     assert_equal <<CSS, result
+/* line 1 */
+.foo {
+  background: url('/images/asdf.svg?busted=true#image-1');
+}
+CSS
+  end
+
+  def test_default_cache_buster_handles_id_refs_for_images
+    FileUtils.touch "images/asdf.svg"
+    sass = Sass::Engine.new(<<-SCSS, Compass.configuration.to_sass_engine_options.merge(:syntax => :scss))
+      .foo { background: image-url("asdf.svg#image-1") }
+    SCSS
+    result = sass.render
+     assert_equal <<CSS, result
+/* line 1 */
+.foo {
+  background: url('/images/asdf.svg?#{File.mtime("images/asdf.svg").to_i}#image-1');
+}
+CSS
+  end
+
+  def test_cache_buster_handles_id_refs_for_fonts
+    config = Compass::Configuration::Data.new("test_cache_buster_file_is_closed")
+    the_file = nil
+    was_called = nil
+    FileUtils.touch "fonts/asdf.ttf"
+    config.asset_cache_buster do |path, file|
+      was_called = true
+      the_file = file
+      "busted=true"
+    end
+
+    Compass.add_configuration(config)
+
+    sass = Sass::Engine.new(<<-SCSS, Compass.configuration.to_sass_engine_options.merge(:syntax => :scss))
+      .foo { background: font-url("asdf.ttf#iefix") }
+    SCSS
+    result = sass.render
+    assert was_called
+    assert_kind_of File, the_file
+    assert the_file.closed?
+     assert_equal <<CSS, result
+/* line 1 */
+.foo {
+  background: url('/fonts/asdf.ttf?busted=true#iefix');
+}
+CSS
+  end
+
+
   def test_inherited_arrays_augmentations_serialize
     inherited = TestData.new
     inherited.stuff << :a
@@ -232,6 +354,7 @@ CONFIG
     assert_equal "/home/chris/my_compass_project/css/foo", plugin_opts[:template_location].find{|s,c| s == "/home/chris/my_compass_project/../foo"}[1]
 
     expected_serialization = <<EXPECTED
+require 'compass/import-once/activate'
 # Require any additional compass plugins here.
 project_path = "/home/chris/my_compass_project"
 
@@ -294,6 +417,7 @@ EXPECTED
     assert_equal "/home/chris/my_compass_project/css/foo", Compass.configuration.to_sass_plugin_options[:template_location].find{|s,c| s == "/home/chris/my_compass_project/../foo"}[1]
 
     expected_serialization = <<EXPECTED
+require 'compass/import-once/activate'
 # Require any additional compass plugins here.
 project_path = "/home/chris/my_compass_project"
 
@@ -332,6 +456,7 @@ EXPECTED
       assert_equal 'bar', Compass.configuration.to_sass_plugin_options[:foo]
 
       expected_serialization = <<EXPECTED
+require 'compass/import-once/activate'
 # Require any additional compass plugins here.
 
 # Set this to the root of your project when deployed:
@@ -367,6 +492,7 @@ EXPECTED
       assert_equal ["/Users/chris/Projects/my_compass_project/images/sprites"], Compass.configuration.sprite_load_path.to_a
 
       expected_serialization = <<EXPECTED
+require 'compass/import-once/activate'
 # Require any additional compass plugins here.
 
 # Set this to the root of your project when deployed:
@@ -437,6 +563,7 @@ EXPECTED
 
     assert_equal "baz", Compass.configuration.foobar
     expected_serialization = <<EXPECTED
+require 'compass/import-once/activate'
 # Require any additional compass plugins here.
 
 # Set this to the root of your project when deployed:

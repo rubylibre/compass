@@ -1,3 +1,5 @@
+require 'pathname'
+
 module Compass
   class Compiler
 
@@ -15,7 +17,8 @@ module Compass
       self.sass_options.delete(:quiet)
       self.sass_options.update(sass_opts)
       self.sass_options[:cache_location] ||= determine_cache_location
-      self.sass_options[:importer] = self.importer = Sass::Importers::Filesystem.new(from)
+      self.sass_options[:filesystem_importer] ||= Sass::Importers::Filesystem
+      self.sass_options[:importer] = self.importer = self.sass_options[:filesystem_importer].new(from)
       self.sass_options[:compass] ||= {}
       self.sass_options[:compass][:logger] = self.logger
       self.sass_options[:compass][:environment] = Compass.configuration.environment
@@ -54,8 +57,16 @@ module Compass
       @css_files ||= sass_files.map{|sass_file| corresponding_css_file(sass_file)}
     end
 
+    def sourcemap_files
+      @sourcemap_files ||= sass_files.map{|sass_file| corresponding_sourcemap_file(sass_file)}
+    end
+
     def corresponding_css_file(sass_file)
       "#{to}/#{stylesheet_name(sass_file)}.css"
+    end
+
+    def corresponding_sourcemap_file(sass_file)
+      "#{to}/#{stylesheet_name(sass_file)}.css.map"
     end
 
     def target_directories
@@ -85,10 +96,18 @@ module Compass
       nil
     end
 
+    def reset!
+      reset_staleness_checker!
+      @sass_files = nil
+      @css_files = nil
+      @sourcemap_files = nil
+    end
+
     def clean!
       remove options[:cache_location]
-      css_files.each do |css_file|
+      css_files.zip(sourcemap_files).each do |css_file, sourcemap_file|
         remove css_file
+        remove sourcemap_file
       end
     end
 
@@ -105,9 +124,9 @@ module Compass
 
       # Compile each sass file.
       result = timed do
-        sass_files.zip(css_files).each do |sass_filename, css_filename|
+        sass_files.zip(css_files, sourcemap_files).each do |sass_filename, css_filename, sourcemap_filename|
           begin
-            compile_if_required sass_filename, css_filename
+            compile_if_required sass_filename, css_filename, sourcemap_filename
           rescue Sass::SyntaxError => e
             failure_count += 1
             handle_exception(sass_filename, css_filename, e)
@@ -120,40 +139,63 @@ module Compass
       return failure_count
     end
 
-    def compile_if_required(sass_filename, css_filename)
-      if should_compile?(sass_filename, css_filename)
-        compile sass_filename, css_filename
+    def compile_if_required(sass_filename, css_filename, sourcemap_filename = nil)
+      if should_compile?(sass_filename, css_filename, sourcemap_filename)
+        compile sass_filename, css_filename, sourcemap_filename
       else
         logger.record :unchanged, basename(sass_filename) unless options[:quiet]
+        remove(sourcemap_filename) if sourcemap_filename && !options[:sourcemap]
       end
     end
 
-    def timed
+    def timed(timed_thing = lambda {|res| res})
       start_time = Time.now
       res = yield
       end_time = Time.now
-      res.instance_variable_set("@__duration", end_time - start_time)
-      def res.__duration
+      has_duration = timed_thing.call(res)
+      has_duration.instance_variable_set("@__duration", end_time - start_time)
+      def has_duration.__duration
         @__duration
       end
       res
     end
 
     # Compile one Sass file
-    def compile(sass_filename, css_filename)
-      start_time = end_time = nil
-      css_content = logger.red do
-        timed do
-          engine(sass_filename, css_filename).render
+    def compile(sass_filename, css_filename, sourcemap_filename = nil)
+      css_content, sourcemap = logger.red do
+        timed(lambda {|r| r[0]}) do
+          engine = engine(sass_filename, css_filename)
+          if sourcemap_filename && options[:sourcemap]
+            engine.render_with_sourcemap(relative_path(css_filename, sourcemap_filename))
+          else
+            [engine.render, nil]
+          end
         end
       end
       duration = options[:time] ? "(#{(css_content.__duration * 1000).round / 1000.0}s)" : ""
-      write_file(css_filename, css_content, options.merge(:force => true, :extra => duration))
+      write_file(css_filename, css_content, options.merge(:force => true, :extra => duration), sass_options[:unix_newlines])
       Compass.configuration.run_stylesheet_saved(css_filename)
+      if sourcemap && sourcemap_filename
+        sourcemap_content = sourcemap.to_json(:css_path => css_filename,
+                                              :sourcemap_path => sourcemap_filename)
+        write_file(sourcemap_filename, sourcemap_content, options.merge(:force => true), sass_options[:unix_newlines])
+        Compass.configuration.run_sourcemap_saved(sourcemap_filename)
+      elsif sourcemap_filename && File.exist?(sourcemap_filename)
+        remove sourcemap_filename
+        Compass.configuration.run_sourcemap_removed(sourcemap_filename)
+      end
     end
 
-    def should_compile?(sass_filename, css_filename)
-      options[:force] || needs_update?(css_filename, sass_filename)
+    def relative_path(from_path, to_path)
+      Pathname.new(to_path).relative_path_from(Pathname.new(from_path).dirname).to_s
+    end
+
+    def should_compile?(sass_filename, css_filename, sourcemap_filename = nil)
+      return true if css_filename && !File.exist?(css_filename)
+      return true if sourcemap_filename && options[:sourcemap] && !File.exist?(sourcemap_filename)
+      options[:force] ||
+        needs_update?(css_filename, sass_filename) ||
+        (options[:sourcemap] && needs_update?(sourcemap_filename, sass_filename))
     end
 
     # A sass engine for compiling a single file.
@@ -173,7 +215,7 @@ module Compass
       formatted_error = "(Line #{e.sass_line}#{ " of #{exception_file}" if exception_file}: #{e.message})"
       logger.record :error, file, formatted_error
       Compass.configuration.run_stylesheet_error(sass_filename, formatted_error)
-      write_file css_filename, error_contents(e, sass_filename), options.merge(:force => true)
+      write_file css_filename, error_contents(e, sass_filename), options.merge(:force => true), sass_options[:unix_newlines]
     end
 
     # Haml refactored this logic in 2.3, this is backwards compatibility for either one

@@ -1,3 +1,4 @@
+FileUtils.rm_f "RELEASE_VERSION"
 require 'rake/testtask'
 require 'rubygems/package_task'
 require 'bundler/setup'
@@ -6,7 +7,13 @@ namespace :test do
   Rake::TestTask.new(:integrations) do |t|
     t.libs << "test/integrations"
     t.libs << "lib"
-    t.test_files = FileList['test/integrations/*_test.rb']
+    t.test_files = FileList['test/integrations/**/*_test.rb']
+    t.verbose = true
+  end
+  Rake::TestTask.new(:units) do |t|
+    t.libs << "test/units"
+    t.libs << "lib"
+    t.test_files = FileList['test/units/**/*_test.rb']
     t.verbose = true
   end
 end
@@ -30,11 +37,12 @@ end
 
 
 desc "Run all tests"
-task :test => ["test:integrations"]
+task :test => ["test:integrations", "test:units"]
 
 task :default => :test
 
 spec = eval(File.read(FileList['compass-core.gemspec'].first), binding, "compass-core.gemspec")
+spec.files << "RELEASE_VERSION"
 
 def spec.bump!
   segments = version.to_s.split(".")
@@ -49,6 +57,14 @@ spec.bump! unless ENV["SAME_VERSION"]
 
 desc "Run tests and build compass-core-#{spec.version}.gem"
 task :build => [:test, :gem]
+
+task :gem => :release_version
+
+task :release_version do
+  open("RELEASE_VERSION", "w") do |f|
+    f.write(spec.version.to_s)
+  end
+end
 
 desc "Make the prebuilt gem compass-core-#{spec.version}.gem public."
 task :publish => [:record_version, :push_gem, :tag]
@@ -67,8 +83,9 @@ task :record_version do
     open(FileList["VERSION"].first, "w") do |f|
       f.write(spec.version.to_s)
     end
-    sh "git add VERSION Gemfile.lock"
+    sh "git add VERSION"
     sh %Q{git commit -m "Bump version to #{spec.version}."}
+    sh "rm RELEASE_VERSION"
   end
 end
 

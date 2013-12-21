@@ -6,7 +6,7 @@ Gem::Specification.new do |gemspec|
   gemspec.version = Compass::VERSION # Update VERSION file to set this.
   gemspec.description = "Compass is a Sass-based Stylesheet Framework that streamlines the creation and maintenance of CSS."
   gemspec.homepage = "http://compass-style.org"
-  gemspec.authors = ["Chris Eppstein", "Scott Davis", "Eric A. Meyer", "Brandon Mathis", "Anthony Short", "Nico Hagenburger"]
+  gemspec.authors = ["Chris Eppstein", "Scott Davis", "Eric A. Meyer", "Brandon Mathis", "Nico Hagenburger"]
   gemspec.email = "chris@eppsteins.net"
   gemspec.executables = %w(compass)
   gemspec.require_paths = %w(lib)
@@ -14,7 +14,8 @@ Gem::Specification.new do |gemspec|
   gemspec.summary = %q{A Real Stylesheet Framework}
 
   gemspec.add_dependency 'sass', '~> 3.3.0.rc.1'
-  gemspec.add_dependency 'compass-core'
+  gemspec.add_dependency 'compass-core', "~> #{File.read(File.join(File.dirname(__FILE__),"..","core","VERSION")).strip}"
+  gemspec.add_dependency 'compass-import-once', "~> #{File.read(File.join(File.dirname(__FILE__),"..","import-once","VERSION")).strip}"
   gemspec.add_dependency 'chunky_png', '~> 1.2'
   gemspec.add_dependency 'listen', '~> 1.1.0'
   gemspec.add_dependency 'json'

@@ -7,27 +7,26 @@ module Compass::Core::SassExtensions::Functions::InlineImage
   end
 
   def inline_font_files(*args)
-    raise Sass::SyntaxError, "An even number of arguments must be passed to font_files()" unless args.size % 2 == 0
     files = []
-    while args.size > 0
-      path = args.shift.value
+    with_each_font_file(*args) do |path, type|
+      path = path.value
       real_path = File.join(Compass.configuration.fonts_path, path)
-      url = inline_image_string(data(real_path), compute_mime_type(path))
-      files << "#{url} format('#{args.shift}')"
+      data = inline_image_string(data(real_path), compute_mime_type(path))
+      files << list(data, unquoted_string("format('#{type}')"), :space)
     end
-    Sass::Script::String.new(files.join(", "))
+    list(files, :comma)
   end
 
 protected
   def inline_image_string(data, mime_type)
     data = [data].flatten.pack('m').gsub("\n","")
     url = "url('data:#{mime_type};base64,#{data}')"
-    Sass::Script::String.new(url)
+    unquoted_string(url)
   end
 
 private
   def compute_mime_type(path, mime_type = nil)
-    return mime_type if mime_type
+    return mime_type.value if mime_type
     case path
     when /\.png$/i
       'image/png'
@@ -44,7 +43,7 @@ private
     when /\.ttf$/i
       'font/truetype'
     when /\.woff$/i
-      'application/x-font-woff'
+      'application/font-woff'
     when /\.off$/i
       'font/openfont'
     when /\.([a-zA-Z]+)$/

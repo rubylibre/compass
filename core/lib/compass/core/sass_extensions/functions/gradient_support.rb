@@ -2,33 +2,45 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
 
   GRADIENT_ASPECTS = %w(webkit moz svg css2 o owg).freeze
 
-  class ColorStop < Sass::Script::Literal
+  class ColorStop < Sass::Script::Value::Base
+    include Sass::Script::Value::Helpers
     attr_accessor :color, :stop
     def children
       [color, stop].compact
     end
     def initialize(color, stop = nil)
-      unless Sass::Script::Color === color ||
-             Sass::Script::Funcall === color ||
-             (Sass::Script::String === color && color.value == "currentColor")||
-             (Sass::Script::String === color && color.value == "transparent")
-        raise Sass::SyntaxError, "Expected a color. Got: #{color}"
-      end
-      if stop && !stop.is_a?(Sass::Script::Number)
-        raise Sass::SyntaxError, "Expected a number. Got: #{stop}"
-      end
+      assert_legal_color! color
+      assert_legal_color_stop! stop if stop
       self.color, self.stop = color, stop
     end
     def inspect
       to_s
     end
 
+    def assert_legal_color!(color)
+      unless Sass::Script::Value::Color === color ||
+             Sass::Script::Tree::Funcall === color ||
+             (Sass::Script::Value::String === color && color.value == "currentColor")||
+             (Sass::Script::Value::String === color && color.value == "transparent")
+        raise Sass::SyntaxError, "Expected a color. Got: #{color}"
+      end
+    end
+    def assert_legal_color_stop!(stop)
+      case stop
+      when Sass::Script::Value::String
+        return stop.value.start_with?("calc(")
+      when Sass::Script::Value::Number
+        return true
+      end
+      raise Sass::SyntaxError, "Expected a number or numerical expression. Got: #{stop.inspect}"
+    end
+
     def self.color_to_svg_s(c)
       # svg doesn't support the "transparent" keyword; we need to manually
       # refactor it into "transparent black"
-      if c.is_a?(Sass::Script::String) && c.value == "transparent"
+      if c.is_a?(Sass::Script::Value::String) && c.value == "transparent"
         "black"
-      elsif c.is_a?(Sass::Script::String)
+      elsif c.is_a?(Sass::Script::Value::String)
         c.value.dup
       else
         self.color_to_s(c.with(:alpha => 1))
@@ -38,9 +50,9 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
     def self.color_to_svg_alpha(c)
       # svg doesn't support the "transparent" keyword; we need to manually
       # refactor it into "transparent black"
-      if c.is_a?(Sass::Script::String) && c.value == "transparent"
+      if c.is_a?(Sass::Script::Value::String) && c.value == "transparent"
         0
-      elsif c.is_a?(Sass::Script::String) && c.value == "currentColor"
+      elsif c.is_a?(Sass::Script::Value::String) && c.value == "currentColor"
         1
       else
         c.alpha
@@ -48,7 +60,7 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
     end
 
     def self.color_to_s(c)
-      if c.is_a?(Sass::Script::String)
+      if c.is_a?(Sass::Script::Value::String)
         c.value.dup
       else
         c.inspect.dup
@@ -59,21 +71,22 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
       s = self.class.color_to_s(color)
       if stop
         s << " "
-        if stop.unitless?
-          s << stop.times(Sass::Script::Number.new(100, ["%"])).inspect
+        if stop.respond_to?(:unitless?) && stop.unitless?
+          s << stop.times(number(100, "%")).inspect
         else
-          s << stop.inspect
+          s << stop.to_s
         end
       end
       s
     end
 
     def to_sass(options = nil)
-      Sass::Script::String.new("color-stop(#{color.to_sass rescue nil}, #{stop.to_sass rescue nil})")
+      identifier("color-stop(#{color.to_sass rescue nil}, #{stop.to_sass rescue nil})")
     end
   end
 
   module Gradient
+    include Sass::Script::Value::Helpers
 
     def self.included(base)
       base.extend ClassMethods
@@ -83,7 +96,7 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
       def standardized_prefix(prefix)
         class_eval %Q{
           def to_#{prefix}(options = self.options)
-            Sass::Script::String.new("-#{prefix}-\#{to_s_prefixed(options)}")
+            identifier("-#{prefix}-\#{to_s_prefixed(options)}")
           end
         }
       end
@@ -106,7 +119,7 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
     end
 
     def angle?(value)
-      value.is_a?(Sass::Script::Number) &&
+      value.is_a?(Sass::Script::Value::Number) &&
       value.numerator_units.size == 1 &&
       value.numerator_units.first == "deg" &&
       value.denominator_units.empty?
@@ -114,7 +127,7 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
 
   end
 
-  class RadialGradient < Sass::Script::Literal
+  class RadialGradient < Sass::Script::Value::Base
     include Gradient
 
     attr_accessor :position, :shape_and_size, :color_stops
@@ -157,11 +170,11 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
     end
 
     def to_css2(options = self.options)
-      Sass::Script::String.new("")
+      null
     end
   end
 
-  class LinearGradient < Sass::Script::Literal
+  class LinearGradient < Sass::Script::Value::Base
     include Gradient
 
     attr_accessor :color_stops, :position_or_angle, :legacy
@@ -191,10 +204,10 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
     end
 
     def convert_to_or_from_legacy(position_or_angle, options = self.options)
-      input = if position_or_angle.is_a?(Sass::Script::Number)
+      input = if position_or_angle.is_a?(Sass::Script::Value::Number)
           position_or_angle
         else
-          opts(Sass::Script::List.new(position_or_angle.to_s.split(' ').map {|s| Sass::Script::String.new(s) }, :space))
+          opts(list(position_or_angle.to_s.split(' ').map {|s| identifier(s) }, :space))
         end
       return convert_angle_from_offical(input).to_s(options)
     end
@@ -216,7 +229,10 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
 
     def supports?(aspect)
       # I don't know how to support degree-based gradients in old webkit gradients (owg) or svg so we just disable them.
-      if %w(owg svg).include?(aspect) && position_or_angle.is_a?(Sass::Script::Number) && position_or_angle.numerator_units.include?("deg")
+      if %w(owg svg).include?(aspect) && position_or_angle.is_a?(Sass::Script::Value::Number) && position_or_angle.numerator_units.include?("deg")
+        false
+      elsif aspect == "svg" && color_stops.value.any?{|cs| cs.stop.is_a?(Sass::Script::Value::String) }
+        # calc expressions cannot be represented in svg
         false
       else
         super
@@ -224,35 +240,36 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
     end
 
     def to_svg(options = self.options)
-      linear_svg_gradient(color_stops, position_or_angle || Sass::Script::String.new("top"))
+      linear_svg_gradient(color_stops, position_or_angle || identifier("top"))
     end
 
     def to_css2(options = self.options)
-      Sass::Script::String.new("")
+      null
     end
   end
 
   module Functions
+    include Sass::Script::Value::Helpers
 
     def convert_angle_from_offical(deg)
-      if deg.is_a?(Sass::Script::Number)
-        return Sass::Script::Number.new((deg.value.to_f - 450).abs % 360, ['deg'])
+      if deg.is_a?(Sass::Script::Value::Number)
+        return number((deg.value.to_f - 450).abs % 360, 'deg')
       else
         args = deg.value
         direction = []
-        if args[0] == Sass::Script::String.new('to')
+        if args[0] == identifier('to')
           if args.size < 2
             direction = args
           else
             direction << opposite_position(args[1])
           end
         else
-          direction << Sass::Script::String.new('to')
+          direction << identifier('to')
           args.each do |pos|
             direction << opposite_position(pos)
           end
         end
-        return Sass::Script::String.new(direction.join(' '))
+        return opts(list(direction, :space))
       end
     end
 
@@ -260,10 +277,10 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
     # otherwise, returns the original argument
     def grad_point(position)
       original_value = position
-      position = unless position.is_a?(Sass::Script::List)
-        opts(Sass::Script::List.new([position], :space))
+      position = unless position.is_a?(Sass::Script::Value::List)
+        opts(list([position], :space))
       else
-        opts(Sass::Script::List.new(position.value.dup, position.separator))
+        opts(list(position.value.dup, position.separator))
       end
       # Handle unknown arguments by passing them along untouched.
       unless position.value.all?{|p| is_position(p) }
@@ -271,43 +288,41 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
       end
       if (position.value.first.value =~ /top|bottom/) or (position.value.last.value =~ /left|right/)
         # browsers are pretty forgiving of reversed positions so we are too.
-        position = Sass::Script::List.new(position.value.reverse, position.separator)
+        position = opts(list(position.value.reverse, position.separator))
       end
       if position.value.size == 1
         if position.value.first.value =~ /top|bottom/
-          position = Sass::Script::List.new(
-            [Sass::Script::String.new("center"), position.value.first], position.separator)
+          position = opts(list(identifier("center"), position.value.first, position.separator))
         elsif position.value.first.value =~ /left|right/
-          position = Sass::Script::List.new(
-            [position.value.first, Sass::Script::String.new("center")], position.separator)
+          position = opts(list(position.value.first, identifier("center"), position.separator))
         end
       end
-      position = Sass::Script::List.new(position.value.map do |p|
+      position = opts(list(position.value.map do |p|
         case p.value
         when /top|left/
-          Sass::Script::Number.new(0, ["%"])
+          number(0, "%")
         when /bottom|right/
-          Sass::Script::Number.new(100, ["%"])
+          number(100, "%")
         when /center/
-          Sass::Script::Number.new(50, ["%"])
+          number(50, "%")
         else
           p
         end
-      end, position.separator)
+      end, position.separator))
       position
     end
 
     def color_stops(*args)
-      opts(Sass::Script::List.new(args.map do |arg|
+      opts(list(args.map do |arg|
         if ColorStop === arg
           arg
-        elsif Sass::Script::Color === arg
+        elsif Sass::Script::Value::Color === arg
           ColorStop.new(arg)
-        elsif Sass::Script::List === arg
+        elsif Sass::Script::Value::List === arg
           ColorStop.new(*arg.value)
-        elsif Sass::Script::String === arg && arg.value == "transparent"
+        elsif Sass::Script::Value::String === arg && arg.value == "transparent"
           ColorStop.new(arg)
-        elsif Sass::Script::String === arg && arg.value == "currentColor"
+        elsif Sass::Script::Value::String === arg && arg.value == "currentColor"
           ColorStop.new(arg)
         else
           raise Sass::SyntaxError, "Not a valid color stop: #{arg.class.name}: #{arg}"
@@ -375,7 +390,7 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
       stops = color_stops_in_percentages(color_list).map do |stop, color|
         "color-stop(#{stop.inspect}, #{ColorStop.color_to_s(color)})"
       end
-      Sass::Script::String.new(stops.join(", "))
+      opts(list(stops, :comma))
     end
 
     def color_stops_in_percentages(color_list)
@@ -383,10 +398,11 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
       color_list = normalize_stops(color_list)
       max = color_list.value.last.stop
       last_value = nil
-      color_stops = color_list.value.map do |pos|
+      color_list.value.map do |pos|
+        next [pos.stop, pos.color] if pos.stop.is_a?(Sass::Script::Value::String)
         # have to convert absolute units to percentages for use in color stop functions.
         stop = pos.stop
-        stop = stop.div(max).times(Sass::Script::Number.new(100,["%"])) if stop.numerator_units == max.numerator_units && max.numerator_units != ["%"]
+        stop = stop.div(max).times(number(100, "%")) if stop.numerator_units == max.numerator_units && max.numerator_units != ["%"]
         # Make sure the color stops are specified in the right order.
         if last_value && stop.numerator_units == last_value.numerator_units && stop.denominator_units == last_value.denominator_units && (stop.value * 1000).round < (last_value.value * 1000).round
           raise Sass::SyntaxError.new("Color stops must be specified in increasing order. #{stop.value} came after #{last_value.value}.")
@@ -398,31 +414,31 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
 
     # only used for webkit
     def linear_end_position(position_or_angle, color_list)
-      start_point = grad_point(position_or_angle || Sass::Script::String.new("top"))
-      end_point = grad_point(opposite_position(position_or_angle || Sass::Script::String.new("top")))
+      start_point = grad_point(position_or_angle || identifier("top"))
+      end_point = grad_point(opposite_position(position_or_angle || identifier("top")))
       end_target = color_list.value.last.stop
 
       if color_list.value.last.stop && color_list.value.last.stop.numerator_units == ["px"]
         new_end = color_list.value.last.stop.value
         if start_point.value.first == end_point.value.first && start_point.value.last.value == 0
           # this means top-to-bottom
-          end_point.value[1] = Sass::Script::Number.new(end_target.value)
+          end_point.value[1] = number(end_target.value)
         elsif start_point.value.last == end_point.value.last && start_point.value.first.value == 0
           # this implies left-to-right
-          end_point.value[0] = Sass::Script::Number.new(end_target.value)
+          end_point.value[0] = number(end_target.value)
         end
       end
       end_point
     end
 
     # returns the end position of the gradient from the color stop
-    def grad_end_position(color_list, radial = Sass::Script::Bool.new(false))
+    def grad_end_position(color_list, radial = bool(false))
       assert_type color_list, :List
-      default = Sass::Script::Number.new(100)
-      grad_position(color_list, Sass::Script::Number.new(color_list.value.size), default, radial)
+      default = number(100)
+      grad_position(color_list, number(color_list.value.size), default, radial)
     end
 
-    def grad_position(color_list, index, default, radial = Sass::Script::Bool.new(false))
+    def grad_position(color_list, index, default, radial = bool(false))
       assert_type color_list, :List
       stop = color_list.value[index.value - 1].stop
       if stop && radial.to_bool
@@ -430,17 +446,17 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
         if stop.unitless?
           if stop.value <= 1
             # A unitless number is assumed to be a percentage when it's between 0 and 1
-            stop = stop.times(Sass::Script::Number.new(100, ["%"]))
+            stop = stop.times(number(100, "%"))
           else
             # Otherwise, a unitless number is assumed to be in pixels
-            stop = stop.times(Sass::Script::Number.new(1, ["px"]))
+            stop = stop.times(number(1, "px"))
           end
         end
         if stop.numerator_units == ["%"] && color_list.value.last.stop && color_list.value.last.stop.numerator_units == ["px"]
-          stop = stop.times(color_list.value.last.stop).div(Sass::Script::Number.new(100, ["%"]))
+          stop = stop.times(color_list.value.last.stop).div(number(100, "%"))
         end
         Compass::Logger.new.record(:warning, "Webkit only supports pixels for the start and end stops for radial gradients. Got: #{orig_stop}") if stop.numerator_units != ["px"]
-        stop.div(Sass::Script::Number.new(1, stop.numerator_units, stop.denominator_units))
+        stop.div(Sass::Script::Value::Number.new(1, stop.numerator_units, stop.denominator_units))
       elsif stop
         stop
       else
@@ -459,7 +475,7 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
 
     def radial_svg_gradient(color_stops, center)
       cx, cy = *grad_point(center).value
-      r = grad_end_position(color_stops,  Sass::Script::Bool.new(true))
+      r = grad_end_position(color_stops,  bool(true))
       stops = color_stops_in_percentages(color_stops)
 
       svg = radial_svg(stops, cx, cy, r)
@@ -470,7 +486,7 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
 
     def color_stop?(arg)
       arg.is_a?(ColorStop) ||
-      (arg.is_a?(Sass::Script::List) && ColorStop.new(*arg.value)) ||
+      (arg.is_a?(Sass::Script::Value::List) && ColorStop.new(*arg.value)) ||
       ColorStop.new(arg)
     rescue
       nil
@@ -479,15 +495,15 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
     def normalize_stops(color_list)
       positions = color_list.value.map{|obj| obj.dup}
       # fill in the start and end positions, if unspecified
-      positions.first.stop = Sass::Script::Number.new(0) unless positions.first.stop
-      positions.last.stop = Sass::Script::Number.new(100, ["%"]) unless positions.last.stop
+      positions.first.stop = number(0) unless positions.first.stop
+      positions.last.stop = number(100, "%") unless positions.last.stop
       # fill in empty values
       for i in 0...positions.size
         if positions[i].stop.nil?
           num = 2.0
           for j in (i+1)...positions.size
             if positions[j].stop
-              positions[i].stop = positions[i-1].stop.plus((positions[j].stop.minus(positions[i-1].stop)).div(Sass::Script::Number.new(num)))
+              positions[i].stop = positions[i-1].stop.plus((positions[j].stop.minus(positions[i-1].stop)).div(number(num)))
               break
             else
               num += 1
@@ -497,34 +513,31 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
       end
       # normalize unitless numbers
       positions.each do |pos|
+        next pos if pos.stop.is_a?(Sass::Script::Value::String)
         if pos.stop.unitless? && pos.stop.value <= 1
-          pos.stop = pos.stop.times(Sass::Script::Number.new(100, ["%"]))
+          pos.stop = pos.stop.times(number(100, "%"))
         elsif pos.stop.unitless?
-          pos.stop = pos.stop.times(Sass::Script::Number.new(1, ["px"]))
+          pos.stop = pos.stop.times(number(1, "px"))
         end
       end
-      if (positions.last.stop.eq(Sass::Script::Number.new(0, ["px"])).to_bool ||
-         positions.last.stop.eq(Sass::Script::Number.new(0, ["%"])).to_bool)
+      if (positions.last.stop.eq(number(0, "px")).to_bool ||
+         positions.last.stop.eq(number(0, "%")).to_bool)
          raise Sass::SyntaxError.new("Color stops must be specified in increasing order")
        end
-      if defined?(Sass::Script::List)
-        opts(Sass::Script::List.new(positions, color_list.separator))
-      else
-        color_list.class.new(*positions)
-      end
+       opts(list(positions, color_list.separator))
     end
 
     def parse_color_stop(arg)
-      return ColorStop.new(arg) if arg.is_a?(Sass::Script::Color)
-      return nil unless arg.is_a?(Sass::Script::String)
+      return ColorStop.new(arg) if arg.is_a?(Sass::Script::Value::Color)
+      return nil unless arg.is_a?(Sass::Script::Value::String)
       color = stop = nil
       expr = Sass::Script::Parser.parse(arg.value, 0, 0)
       case expr
-      when Sass::Script::Color
+      when Sass::Script::Value::Color
         color = expr
-      when Sass::Script::Funcall
+      when Sass::Script::Tree::Funcall
         color = expr
-      when Sass::Script::Operation
+      when Sass::Script::Tree::Operation
         unless [:concat, :space].include?(expr.instance_variable_get("@operator"))
           # This should never happen.
           raise Sass::SyntaxError, "Couldn't parse a color stop from: #{arg.value}"
@@ -555,7 +568,7 @@ module Compass::Core::SassExtensions::Functions::GradientSupport
     end
 
     def radial_svg(color_stops, cx, cy, r)
-      gradient = %Q{<radialGradient id="grad" gradientUnits="userSpaceOnUse" cx="#{cx}" cy="#{cy}" r="#{r}">#{color_stops_svg(color_stops)}</radialGradient>}
+      gradient = %Q{<radialGradient id="grad" gradientUnits="userSpaceOnUse" cx="#{cx}" cy="#{cy}" r="#{r}%">#{color_stops_svg(color_stops)}</radialGradient>}
       svg(gradient)
     end
 
@@ -578,10 +591,7 @@ EOS
     end
 
     def _center_position
-      opts(Sass::Script::List.new([
-        Sass::Script::String.new("center"),
-        Sass::Script::String.new("center")
-      ],:space))
+      opts(list(identifier("center"), identifier("center"), :space))
     end
 
     def opts(v)
@@ -600,14 +610,14 @@ EOS
     end
   end
 
-  class LinearGradient < Sass::Script::Literal
+  class LinearGradient < Sass::Script::Value::Base
     include Assertions
     include Functions
     include Compass::Core::SassExtensions::Functions::Constants
     include Compass::Core::SassExtensions::Functions::InlineImage
   end
 
-  class RadialGradient < Sass::Script::Literal
+  class RadialGradient < Sass::Script::Value::Base
     include Assertions
     include Functions
     include Compass::Core::SassExtensions::Functions::Constants
