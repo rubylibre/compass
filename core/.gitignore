@@ -1,2 +1,5 @@
 pkg/
 RELEASE_VERSION
+test/**/tmp/*
+Gemfile.lock
+.sass-cache
