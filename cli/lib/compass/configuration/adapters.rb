@@ -35,7 +35,8 @@ module Compass
         plugin_opts.merge!(sass_options || {})
         plugin_opts[:load_paths] ||= []
         plugin_opts[:load_paths] += load_paths
-        plugin_opts[:load_paths] << Compass::SpriteImporter.new
+        # @sprites
+        #plugin_opts[:load_paths] << Compass::Sprites::Importer.new
         plugin_opts
       end
 
@@ -77,7 +78,7 @@ module Compass
           next p if p.respond_to?(:find_relative)
           importer.new(p.to_s)
         end
-        load_paths << Compass::SpriteImporter.new
+        load_paths << Compass::Sprites::Importer.new
         load_paths
       end
     end
